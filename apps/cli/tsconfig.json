@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2019",
+    "sourceMap": true,
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": false,
+    "baseUrl": "./",
+    "paths": {
+      "@tunnel-hub/shared": ["../../packages/shared/src/type.ts"]
+    },
+    
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["index.ts"]
+}

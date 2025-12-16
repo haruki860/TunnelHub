@@ -1,0 +1,15 @@
+{
+  "name": "@tunnel-hub/shared",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/type.ts",
+  "exports": {
+    ".": "./src/type.ts"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
