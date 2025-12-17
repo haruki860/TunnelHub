@@ -19,7 +19,9 @@ export default function Home() {
 
   useEffect(() => {
     // 1. サーバー(ポート3000)に接続
-    const socket = io("http://localhost:3000");
+    const SERVER_URL =
+      process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3000";
+    const socket = io(SERVER_URL);
 
     socket.on("connect", () => {
       console.log("Connected to Dashboard Server!");
