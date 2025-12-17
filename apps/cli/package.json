@@ -5,7 +5,9 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx index.ts -p 5173 -s http://localhost:3000",
+    "prod": "tsx index.ts -p 5173 -s https://tunnelhub.onrender.com"
   },
   "keywords": [],
   "author": "",
