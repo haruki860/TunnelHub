@@ -1,4 +1,3 @@
-// apps/server/src/app.controller.ts
 import { Controller, All, Req, Body, Query, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventsGateway } from './events.gateway';
@@ -27,32 +26,10 @@ export class AppController {
     // 1. Tunnel IDの特定
     let targetTunnelId = '';
 
-    // A. URLクエリパラメータから (tunnel_id) - 最優先
-    if (req.query.tunnel_id && typeof req.query.tunnel_id === 'string') {
-      targetTunnelId = req.query.tunnel_id;
-
-      // クエリパラメータで取得した場合、Cookieにも保存してリダイレクト
-      res.cookie('tunnel_id', targetTunnelId, {
-        maxAge: 86400000, // 1日
-        httpOnly: false,
-        sameSite: 'lax',
-        path: '/',
-      });
-
-      // クエリパラメータを削除してリダイレクト
-      const cleanUrl = req.originalUrl
-        .replace(/[?&]tunnel_id=[^&]+/, '')
-        .replace(/\?$/, '');
-      res.redirect(cleanUrl || '/');
-      return;
-    }
-
-    // B. ヘッダーから (x-tunnel-id)
-    if (!targetTunnelId && req.headers['x-tunnel-id']) {
+    if (req.headers['x-tunnel-id']) {
       targetTunnelId = req.headers['x-tunnel-id'] as string;
     }
 
-    // C. Cookieから (tunnel_id)
     if (!targetTunnelId && req.headers.cookie) {
       const cookies = req.headers.cookie.split(';').reduce(
         (acc, cookie) => {
@@ -62,7 +39,6 @@ export class AppController {
         },
         {} as Record<string, string>,
       );
-
       if (cookies['tunnel_id']) {
         targetTunnelId = cookies['tunnel_id'];
       }
@@ -70,20 +46,60 @@ export class AppController {
 
     // 2. IDがない場合: Web側の入力画面へリダイレクト
     if (!targetTunnelId) {
-      const webUrl = this.configService.get<string>('webUrl');
+      if (req.path.startsWith('/socket.io')) return;
 
+      const webUrl =
+        this.configService.get<string>('webUrl') || 'http://localhost:3001';
       const protocol = req.protocol;
       const host = req.get('host');
       const originalFullUrl = `${protocol}://${host}${req.originalUrl}`;
 
-      // Web側の /entry ページへ飛ばす
       res.redirect(
         `${webUrl}/entry?returnUrl=${encodeURIComponent(originalFullUrl)}`,
       );
       return;
     }
 
-    // 3. リクエスト転送処理
+    // 3. トンネル情報の取得と接続チェック
+    const tunnelInfo = this.eventsGateway.getTunnelInfo(targetTunnelId);
+
+    if (!tunnelInfo) {
+      res.status(502).json({
+        error: 'Bad Gateway',
+        message: `Tunnel ID "${targetTunnelId}" is not connected.`,
+      });
+      return;
+    }
+
+    // ★修正: パスワード認証 (Basic Auth)
+    if (tunnelInfo.password) {
+      const authHeader = req.headers.authorization;
+
+      if (!authHeader) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="Tunnel Protected"');
+        res.status(401).send('Authentication required');
+        return;
+      }
+
+      const match = authHeader.match(/^Basic (.+)$/);
+      if (!match) {
+        res.status(401).send('Invalid Authorization header');
+        return;
+      }
+
+      const credentials = Buffer.from(match[1], 'base64').toString('utf-8');
+
+      // ★ここが変わりました: user変数を作らずにスキップします
+      const [, pass] = credentials.split(':');
+
+      if (pass !== tunnelInfo.password) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="Tunnel Protected"');
+        res.status(401).send('Invalid password');
+        return;
+      }
+    }
+
+    // 4. リクエスト転送処理
     const safeHeaders = Object.entries(req.headers).reduce(
       (acc, [key, value]) => {
         if (typeof value === 'string') acc[key] = value;
@@ -92,6 +108,8 @@ export class AppController {
       },
       {} as Record<string, string>,
     );
+
+    delete safeHeaders['authorization'];
 
     const requestData: IncomingRequest = {
       requestId,
@@ -135,16 +153,19 @@ export class AppController {
       });
     } catch (error) {
       console.error(`❌ Request Failed for ${targetTunnelId}:`, error);
-      res.status(502).json({
-        error: 'Bad Gateway',
-        message: `Tunnel ID "${targetTunnelId}" is not connected or timed out.`,
-      });
+
+      if (!res.headersSent) {
+        res.status(504).json({
+          error: 'Gateway Timeout',
+          message: `Tunnel ID "${targetTunnelId}" failed to respond.`,
+        });
+      }
 
       this.eventsGateway.broadcastLog({
         requestId,
         method: req.method,
         path: requestPath,
-        status: 502,
+        status: 504,
         duration: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       });

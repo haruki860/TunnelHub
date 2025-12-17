@@ -1,89 +1,96 @@
 "use client";
 
 import { useState, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
-function EntryContent() {
-  const [tunnelId, setTunnelId] = useState("");
-  const searchParams = useSearchParams();
+function EntryForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  
+  // サーバーから渡された「戻るべき場所」を取得
+  const returnUrl = searchParams.get("returnUrl");
+  
+  const [tunnelId, setTunnelId] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleJoin = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tunnelId.trim()) return;
+    if (!tunnelId) return;
+    setIsLoading(true);
 
-    // 元のアクセス先へ戻す (なければサーバーのルートへ)
-    const returnUrl = searchParams.get("returnUrl");
+    // ★重要: CookieにIDを保存 (有効期限は1日, パスは全体)
+    // これにより、Server(Render)への次のアクセス時にCookieが送信されます
+    document.cookie = `tunnel_id=${tunnelId}; path=/; max-age=86400; SameSite=Lax`;
 
-    if (returnUrl) {
-      // サーバー側へ戻る際に、Tunnel IDをヘッダーとして設定できるようにCookieを設定
-      // 異なるドメイン間でもCookieが送信されるように設定
-      const url = new URL(returnUrl);
-
-      // Cookieを設定（同一ドメインの場合のみ有効）
-      document.cookie = `tunnel_id=${tunnelId}; path=/; max-age=86400; SameSite=None; Secure`;
-
-      // リダイレクト先のURLにTunnel IDをクエリパラメータとして追加
-      url.searchParams.set("tunnel_id", tunnelId);
-      window.location.href = url.toString();
-    } else {
-      // 特に指定がなければダッシュボードへ
-      router.push("/");
-    }
+    // 少し待ってからリダイレクト（Cookieの反映を確実にするため）
+    setTimeout(() => {
+      if (returnUrl && returnUrl.startsWith("http")) {
+         // Server(Render)へ戻る（外部サイトへの遷移なので window.location を使用）
+         window.location.href = returnUrl;
+      } else {
+         // returnUrlがない場合はダッシュボードトップへ
+         router.push("/");
+      }
+    }, 100);
   };
 
   return (
-    <div className="min-h-screen bg-[#0f172a] text-white flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-[#1e293b] p-8 rounded-xl border border-gray-800 shadow-2xl">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-blue-500 mb-2">
-            🚀 TunnelHub
-          </h1>
-          <p className="text-gray-400">
-            アクセス先のTunnel IDを入力してください
+    <div className="bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-md border border-gray-700">
+      <div className="text-center mb-8">
+        <h1 className="text-3xl font-bold text-blue-500 mb-2">
+          TunnelHub
+        </h1>
+        <p className="text-gray-400 text-sm">
+          Secure Tunnel Access
+        </p>
+      </div>
+      
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div>
+          <label htmlFor="tunnelId" className="block text-sm font-medium text-gray-300 mb-2">
+            Enter Tunnel ID
+          </label>
+          <input
+            type="text"
+            id="tunnelId"
+            value={tunnelId}
+            onChange={(e) => setTunnelId(e.target.value)}
+            className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-gray-600 transition-all"
+            placeholder="e.g. my-secret-room"
+            autoComplete="off"
+            autoFocus
+            required
+          />
+          <p className="text-xs text-gray-500 mt-2">
+            The ID specified when starting the CLI.
           </p>
         </div>
 
-        <form onSubmit={handleJoin} className="space-y-6">
-          <div>
-            <label
-              htmlFor="tunnelId"
-              className="block text-sm font-medium text-gray-400 mb-2"
-            >
-              Tunnel ID
-            </label>
-            <input
-              type="text"
-              id="tunnelId"
-              value={tunnelId}
-              onChange={(e) => setTunnelId(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg bg-[#0f172a] border border-gray-700 text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-all"
-              placeholder="例: my-api"
-              autoFocus
-              required
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors shadow-lg shadow-blue-900/20"
-          >
-            Go to Tunnel
-          </button>
-        </form>
-
-        <p className="mt-6 text-center text-xs text-gray-600">
-          Powered by TunnelHub
-        </p>
-      </div>
+        <button
+          type="submit"
+          disabled={isLoading}
+          className={`w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-lg transition duration-200 shadow-md flex justify-center items-center ${
+            isLoading ? "opacity-50 cursor-not-allowed" : "hover:transform hover:-translate-y-0.5"
+          }`}
+        >
+          {isLoading ? (
+            <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+          ) : (
+            "Connect"
+          )}
+        </button>
+      </form>
     </div>
   );
 }
 
 export default function EntryPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
-      <EntryContent />
-    </Suspense>
+    <div className="min-h-screen flex items-center justify-center bg-gray-950 text-white p-4">
+      {/* useSearchParamsを使用するためSuspenseでラップ必須 */}
+      <Suspense fallback={<div className="text-blue-500">Loading...</div>}>
+        <EntryForm />
+      </Suspense>
+    </div>
   );
 }
