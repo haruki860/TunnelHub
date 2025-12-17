@@ -1,12 +1,12 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss/preflight";
+@import "tailwindcss/utilities";
+
 
 :root {
   --background: #ffffff;
   --foreground: #171717;
-  --font-geist-sans: 'Geist Sans', Arial, Helvetica, sans-serif;
-  --font-geist-mono: 'Geist Mono', monospace;
+  --font-geist-sans: "Geist Sans", Arial, Helvetica, sans-serif;
+  --font-geist-mono: "Geist Mono", monospace;
 }
 
 @media (prefers-color-scheme: dark) {
