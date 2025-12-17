@@ -1,8 +1,8 @@
 import { Controller, All, Req, Body, Query, Res } from '@nestjs/common';
 import { EventsGateway } from './events.gateway';
 import { IncomingRequest } from '@tunnel-hub/shared';
-import { Response } from 'express';
-import { randomUUID } from 'crypto';
+import { Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 
 @Controller()
 export class AppController {
@@ -10,49 +10,92 @@ export class AppController {
 
   @All('*')
   async receiveHttp(
-    @Req() req,
-    @Body() body,
-    @Query() query,
+    @Req() req: Request,
+    @Body() body: unknown,
+    @Query() query: unknown,
     @Res() res: Response,
-  ) {
-    console.log(`🌍 HTTP Request Came: ${req.method} ${req.url}`);
+  ): Promise<void> {
+    const startTime = Date.now();
+    const requestId = uuidv4();
+    const requestPath = req.originalUrl || req.url || '/';
 
-    // リクエストIDを生成
-    const requestId = randomUUID();
+    console.log(
+      `🌍 HTTP Request: ${req.method} ${requestPath} (ID: ${requestId})`,
+    );
+
+    // ヘッダーの型変換
+    const safeHeaders = Object.entries(req.headers).reduce(
+      (acc, [key, value]) => {
+        if (typeof value === 'string') {
+          acc[key] = value;
+        } else if (Array.isArray(value)) {
+          acc[key] = value.join(',');
+        }
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
 
     const requestData: IncomingRequest = {
       requestId,
       method: req.method,
-      path: req.url,
-      body: body,
-      query: query,
-      headers: req.headers as Record<string, string>,
+      path: requestPath,
+      body,
+      query,
+      headers: safeHeaders,
     };
 
     try {
-      // Gatewayのメソッドを呼び、レスポンスを待機
-      const response = await this.eventsGateway.broadcastRequest(requestData);
+      // ★超シンプル化: Gatewayを呼ぶだけ！待機処理はGatewayがやってくれる
+      const clientResponse =
+        await this.eventsGateway.broadcastRequest(requestData);
 
-      // レスポンスヘッダーを設定
-      Object.entries(response.headers).forEach(([key, value]) => {
-        res.setHeader(key, value);
+      // レスポンス処理
+      if (clientResponse.headers) {
+        Object.entries(clientResponse.headers).forEach(([key, value]) => {
+          res.setHeader(key, value);
+        });
+      }
+
+      res.status(clientResponse.status);
+
+      const contentType = clientResponse.headers?.['content-type'] || '';
+      if (
+        contentType.includes('application/json') &&
+        typeof clientResponse.body === 'object'
+      ) {
+        res.json(clientResponse.body);
+      } else {
+        res.send(clientResponse.body);
+      }
+
+      // ログ送信
+      this.eventsGateway.broadcastLog({
+        requestId,
+        method: req.method,
+        path: requestPath,
+        status: clientResponse.status,
+        duration: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      // タイムアウト等のエラー処理
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown Error';
+      console.error(`❌ Request Failed: ${errorMessage}`);
+
+      this.eventsGateway.broadcastLog({
+        requestId,
+        method: req.method,
+        path: requestPath,
+        status: 504,
+        duration: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
       });
 
-      // ステータスコードとボディを設定して返す
-      res.status(response.statusCode);
-
-      // Content-Typeによって返し方を変える
-      const contentType = response.headers['content-type'] || '';
-      if (contentType.includes('application/json')) {
-        res.json(response.body);
-      } else {
-        res.send(response.body);
-      }
-    } catch (error) {
-      console.error('❌ Error waiting for response:', error);
       res.status(504).json({
         error: 'Gateway Timeout',
-        message: error instanceof Error ? error.message : String(error),
+        message: 'The tunnel client did not respond in time.',
       });
     }
   }
