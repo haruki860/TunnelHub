@@ -23,10 +23,7 @@ const LOCAL_HOST = `http://localhost:${LOCAL_PORT}`;
 console.log(`Target: ${LOCAL_HOST}`);
 console.log(`Server: ${SERVER_URL}`);
 
-// CLI側も少し大きめのパケットを受け取れるようにしておく
-const socket = io(SERVER_URL, {
-  maxHttpBufferSize: 50 * 1024 * 1024,
-});
+const socket = io(SERVER_URL);
 
 socket.on("connect", () => {
   console.log("✅ Connected to Server!");
@@ -108,6 +105,8 @@ socket.on(TUNNEL_EVENTS.REQUEST_INCOMING, async (data: IncomingRequest) => {
     const responseData: OutgoingResponse = {
       requestId: data.requestId,
       status: response.status,
+      statusCode: response.status,
+      statusText: response.statusText,
       headers: responseHeaders,
       body: buffer,
     };
@@ -121,6 +120,8 @@ socket.on(TUNNEL_EVENTS.REQUEST_INCOMING, async (data: IncomingRequest) => {
     socket.emit(TUNNEL_EVENTS.RESPONSE_OUTGOING, {
       requestId: data.requestId,
       status: 502,
+      statusCode: 502,
+      statusText: "Bad Gateway",
       headers: { "content-type": "application/json" },
       body: { error: "Gateway Error", details: String(error) },
     });
