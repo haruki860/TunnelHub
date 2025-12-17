@@ -6,13 +6,19 @@ import type {
   OutgoingResponse,
 } from "../../packages/shared/src/type.ts";
 
+// ★ 本番サーバーのURL (Render等のURLに変更してください)
+const DEFAULT_SERVER_URL = "https://tunnelhub.onrender.com";
+
 const program = new Command();
 
 program
   .name("tunnelhub")
   .description("Expose your local server to the internet")
   .option("-p, --port <number>", "Local server port to forward to", "8080")
-  .option("-s, --server <url>", "TunnelHub Server URL", "http://localhost:3000")
+  // デフォルト値を本番URLに変更
+  .option("-s, --server <url>", "TunnelHub Server URL", DEFAULT_SERVER_URL)
+  .option("-i, --id <string>", "Tunnel ID (subdomain)")
+  .option("-P, --password <string>", "Tunnel Password")
   .parse(process.argv);
 
 const options = program.opts();
@@ -20,13 +26,30 @@ const SERVER_URL = options.server;
 const LOCAL_PORT = options.port;
 const LOCAL_HOST = `http://localhost:${LOCAL_PORT}`;
 
+// ID生成ロジック
+const generateRandomId = () => `th-${Math.random().toString(36).substr(2, 6)}`;
+const TUNNEL_ID = options.id || generateRandomId();
+const TUNNEL_PASSWORD = options.password;
+
 console.log(`Target: ${LOCAL_HOST}`);
 console.log(`Server: ${SERVER_URL}`);
+console.log(`Tunnel ID: ${TUNNEL_ID}`);
 
-const socket = io(SERVER_URL);
+const socket = io(SERVER_URL, {
+  query: {
+    tunnelId: TUNNEL_ID,
+  },
+  auth: {
+    password: TUNNEL_PASSWORD,
+  },
+});
 
 socket.on("connect", () => {
-  console.log("✅ Connected to Server!");
+  console.log(`✅ Connected to Server! (ID: ${TUNNEL_ID})`);
+});
+
+socket.on("connect_error", (err) => {
+  console.error(`❌ Connection Error: ${err.message}`);
 });
 
 socket.on("disconnect", () => {

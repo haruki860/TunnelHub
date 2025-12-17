@@ -1,4 +1,6 @@
+// apps/server/src/app.controller.ts
 import { Controller, All, Req, Body, Query, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { EventsGateway } from './events.gateway';
 import { IncomingRequest } from '@tunnel-hub/shared';
 import { Request, Response } from 'express';
@@ -6,7 +8,10 @@ import { v4 as uuidv4 } from 'uuid';
 
 @Controller()
 export class AppController {
-  constructor(private readonly eventsGateway: EventsGateway) {}
+  constructor(
+    private readonly eventsGateway: EventsGateway,
+    private readonly configService: ConfigService,
+  ) {}
 
   @All('*')
   async receiveHttp(
@@ -19,7 +24,46 @@ export class AppController {
     const requestId = uuidv4();
     const requestPath = req.originalUrl || req.url || '/';
 
-    // ヘッダー変換
+    // 1. Tunnel IDの特定
+    let targetTunnelId = '';
+
+    // A. ヘッダーから (x-tunnel-id)
+    if (req.headers['x-tunnel-id']) {
+      targetTunnelId = req.headers['x-tunnel-id'] as string;
+    }
+
+    // B. Cookieから (tunnel_id)
+    if (!targetTunnelId && req.headers.cookie) {
+      const cookies = req.headers.cookie.split(';').reduce(
+        (acc, cookie) => {
+          const [key, value] = cookie.trim().split('=');
+          acc[key] = value;
+          return acc;
+        },
+        {} as Record<string, string>,
+      );
+
+      if (cookies['tunnel_id']) {
+        targetTunnelId = cookies['tunnel_id'];
+      }
+    }
+
+    // 2. IDがない場合: Web側の入力画面へリダイレクト
+    if (!targetTunnelId) {
+      const webUrl = this.configService.get<string>('webUrl');
+
+      const protocol = req.protocol;
+      const host = req.get('host');
+      const originalFullUrl = `${protocol}://${host}${req.originalUrl}`;
+
+      // Web側の /entry ページへ飛ばす
+      res.redirect(
+        `${webUrl}/entry?returnUrl=${encodeURIComponent(originalFullUrl)}`,
+      );
+      return;
+    }
+
+    // 3. リクエスト転送処理
     const safeHeaders = Object.entries(req.headers).reduce(
       (acc, [key, value]) => {
         if (typeof value === 'string') acc[key] = value;
@@ -39,10 +83,11 @@ export class AppController {
     };
 
     try {
-      const clientResponse =
-        await this.eventsGateway.broadcastRequest(requestData);
+      const clientResponse = await this.eventsGateway.broadcastRequest(
+        requestData,
+        targetTunnelId,
+      );
 
-      // ヘッダー設定
       if (clientResponse.headers) {
         Object.entries(clientResponse.headers).forEach(([key, value]) => {
           res.setHeader(key, value);
@@ -51,7 +96,6 @@ export class AppController {
 
       res.status(clientResponse.status);
 
-      // ★バイナリ対応: Bufferならそのままsend、それ以外はJSON判定
       const body = clientResponse.body;
       if (Buffer.isBuffer(body)) {
         res.send(body);
@@ -61,7 +105,6 @@ export class AppController {
         res.send(body);
       }
 
-      // ログ送信
       this.eventsGateway.broadcastLog({
         requestId,
         method: req.method,
@@ -71,14 +114,17 @@ export class AppController {
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
-      console.error(`❌ Request Failed: ${error}`);
-      res.status(504).json({ error: 'Gateway Timeout' });
+      console.error(`❌ Request Failed for ${targetTunnelId}:`, error);
+      res.status(502).json({
+        error: 'Bad Gateway',
+        message: `Tunnel ID "${targetTunnelId}" is not connected or timed out.`,
+      });
 
       this.eventsGateway.broadcastLog({
         requestId,
         method: req.method,
         path: requestPath,
-        status: 504,
+        status: 502,
         duration: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       });
