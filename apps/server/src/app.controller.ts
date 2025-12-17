@@ -27,12 +27,32 @@ export class AppController {
     // 1. Tunnel IDの特定
     let targetTunnelId = '';
 
-    // A. ヘッダーから (x-tunnel-id)
-    if (req.headers['x-tunnel-id']) {
+    // A. URLクエリパラメータから (tunnel_id) - 最優先
+    if (req.query.tunnel_id && typeof req.query.tunnel_id === 'string') {
+      targetTunnelId = req.query.tunnel_id;
+
+      // クエリパラメータで取得した場合、Cookieにも保存してリダイレクト
+      res.cookie('tunnel_id', targetTunnelId, {
+        maxAge: 86400000, // 1日
+        httpOnly: false,
+        sameSite: 'lax',
+        path: '/',
+      });
+
+      // クエリパラメータを削除してリダイレクト
+      const cleanUrl = req.originalUrl
+        .replace(/[?&]tunnel_id=[^&]+/, '')
+        .replace(/\?$/, '');
+      res.redirect(cleanUrl || '/');
+      return;
+    }
+
+    // B. ヘッダーから (x-tunnel-id)
+    if (!targetTunnelId && req.headers['x-tunnel-id']) {
       targetTunnelId = req.headers['x-tunnel-id'] as string;
     }
 
-    // B. Cookieから (tunnel_id)
+    // C. Cookieから (tunnel_id)
     if (!targetTunnelId && req.headers.cookie) {
       const cookies = req.headers.cookie.split(';').reduce(
         (acc, cookie) => {

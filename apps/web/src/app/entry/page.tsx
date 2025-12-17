@@ -12,16 +12,20 @@ function EntryContent() {
     e.preventDefault();
     if (!tunnelId.trim()) return;
 
-    // 1. CookieにTunnel IDを保存 (ルートパス、1日有効)
-    // localhost同士ならポートが違ってもCookieは共有されます
-    document.cookie = `tunnel_id=${tunnelId}; path=/; max-age=86400; SameSite=Lax`;
-
-    // 2. 元のアクセス先へ戻す (なければサーバーのルートへ)
+    // 元のアクセス先へ戻す (なければサーバーのルートへ)
     const returnUrl = searchParams.get("returnUrl");
 
     if (returnUrl) {
-      // サーバー側へ戻る
-      window.location.href = returnUrl;
+      // サーバー側へ戻る際に、Tunnel IDをヘッダーとして設定できるようにCookieを設定
+      // 異なるドメイン間でもCookieが送信されるように設定
+      const url = new URL(returnUrl);
+
+      // Cookieを設定（同一ドメインの場合のみ有効）
+      document.cookie = `tunnel_id=${tunnelId}; path=/; max-age=86400; SameSite=None; Secure`;
+
+      // リダイレクト先のURLにTunnel IDをクエリパラメータとして追加
+      url.searchParams.set("tunnel_id", tunnelId);
+      window.location.href = url.toString();
     } else {
       // 特に指定がなければダッシュボードへ
       router.push("/");
