@@ -1,0 +1,12 @@
+{
+  "name": "tunnel-hub-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm install && npm run build -w apps/server",
+    "start": "npm run start:prod -w apps/server"
+  }
+}
