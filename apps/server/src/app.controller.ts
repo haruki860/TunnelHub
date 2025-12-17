@@ -26,10 +26,52 @@ export class AppController {
     // 1. Tunnel IDの特定
     let targetTunnelId = '';
 
+    // A. クエリパラメータからの取得 (Webからのリダイレクト戻り時)
+    if (req.query['tunnel_id']) {
+      const incomingId = req.query['tunnel_id'] as string;
+
+      // ★重要: クッキーをセットして、クエリパラメータを消したURLへリダイレクト
+      // これにより、以降はCookieで認証されます
+      res.setHeader(
+        'Set-Cookie',
+        `tunnel_id=${incomingId}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`,
+      );
+
+      // 現在のURLから tunnel_id パラメータを削除してリダイレクト
+      const protocol = req.protocol;
+      const host = req.get('host');
+      const cleanUrl = new URL(
+        `${protocol}://${host}${req.originalUrl.split('?')[0]}`,
+      );
+
+      // 他のクエリパラメータがあれば維持する
+      Object.entries(req.query).forEach(([key, value]) => {
+        if (key !== 'tunnel_id' && value !== undefined) {
+          if (typeof value === 'string') {
+            cleanUrl.searchParams.append(key, value);
+          } else if (Array.isArray(value)) {
+            // 配列の場合、文字列要素のみを結合
+            const stringValues = value.filter(
+              (v): v is string => typeof v === 'string',
+            );
+            if (stringValues.length > 0) {
+              cleanUrl.searchParams.append(key, stringValues.join(','));
+            }
+          }
+          // オブジェクトや他の型は無視
+        }
+      });
+
+      res.redirect(cleanUrl.toString());
+      return;
+    }
+
+    // B. ヘッダー (CLIなど)
     if (req.headers['x-tunnel-id']) {
       targetTunnelId = req.headers['x-tunnel-id'] as string;
     }
 
+    // C. Cookie (2回目以降のアクセス)
     if (!targetTunnelId && req.headers.cookie) {
       const cookies = req.headers.cookie.split(';').reduce(
         (acc, cookie) => {
@@ -48,8 +90,11 @@ export class AppController {
     if (!targetTunnelId) {
       if (req.path.startsWith('/socket.io')) return;
 
+      // ★重要: Renderの環境変数で設定したURLを使う
+      // 設定がない場合は localhost:3001 (開発用)
       const webUrl =
         this.configService.get<string>('webUrl') || 'http://localhost:3001';
+
       const protocol = req.protocol;
       const host = req.get('host');
       const originalFullUrl = `${protocol}://${host}${req.originalUrl}`;
@@ -71,7 +116,7 @@ export class AppController {
       return;
     }
 
-    // ★修正: パスワード認証 (Basic Auth)
+    // 4. パスワード認証 (Basic Auth)
     if (tunnelInfo.password) {
       const authHeader = req.headers.authorization;
 
@@ -88,8 +133,6 @@ export class AppController {
       }
 
       const credentials = Buffer.from(match[1], 'base64').toString('utf-8');
-
-      // ★ここが変わりました: user変数を作らずにスキップします
       const [, pass] = credentials.split(':');
 
       if (pass !== tunnelInfo.password) {
@@ -99,7 +142,7 @@ export class AppController {
       }
     }
 
-    // 4. リクエスト転送処理
+    // 5. リクエスト転送処理
     const safeHeaders = Object.entries(req.headers).reduce(
       (acc, [key, value]) => {
         if (typeof value === 'string') acc[key] = value;
@@ -110,6 +153,8 @@ export class AppController {
     );
 
     delete safeHeaders['authorization'];
+    // 転送時にCookieも削除しておくと安全（ローカルアプリには不要なので）
+    delete safeHeaders['cookie'];
 
     const requestData: IncomingRequest = {
       requestId,
