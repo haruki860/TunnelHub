@@ -1,43 +1,50 @@
 import { io } from "socket.io-client";
+import { Command } from "commander";
 import { TUNNEL_EVENTS } from "../../packages/shared/src/type.ts";
 import type {
   IncomingRequest,
   OutgoingResponse,
 } from "../../packages/shared/src/type.ts";
 
-const SERVER_URL = "http://localhost:3000";
-const LOCAL_PORT = process.env.LOCAL_PORT || "8080";
+const program = new Command();
+
+program
+  .name("tunnelhub")
+  .description("Expose your local server to the internet")
+  .option("-p, --port <number>", "Local server port to forward to", "8080")
+  .option("-s, --server <url>", "TunnelHub Server URL", "http://localhost:3000")
+  .parse(process.argv);
+
+const options = program.opts();
+const SERVER_URL = options.server;
+const LOCAL_PORT = options.port;
 const LOCAL_HOST = `http://localhost:${LOCAL_PORT}`;
 
-console.log("Connecting to Tunnel Server...");
+console.log(`Target: ${LOCAL_HOST}`);
+console.log(`Server: ${SERVER_URL}`);
 
-const socket = io(SERVER_URL);
+// CLI側も少し大きめのパケットを受け取れるようにしておく
+const socket = io(SERVER_URL, {
+  maxHttpBufferSize: 50 * 1024 * 1024,
+});
 
 socket.on("connect", () => {
   console.log("✅ Connected to Server!");
-  console.log(`My ID: ${socket.id}`);
-  console.log(`📍 Forwarding requests to: ${LOCAL_HOST}`);
 });
 
 socket.on("disconnect", () => {
-  console.log("❌ Disconnected from Server");
+  console.log("❌ Disconnected");
 });
 
-// サーバーからリクエストが転送されてきた時の処理
 socket.on(TUNNEL_EVENTS.REQUEST_INCOMING, async (data: IncomingRequest) => {
-  console.log("\n📨 Received Request from Server:");
-  console.log("--------------------------------");
-  console.log(`Request ID: ${data.requestId}`);
-  console.log(`Method: ${data.method}`);
-  console.log(`Path:   ${data.path}`);
-  console.log("--------------------------------");
+  console.log(
+    `📨 Request: ${data.method} ${data.path} (ID: ${data.requestId})`
+  );
 
   try {
-    // Step 1: ローカルサーバーに代理アクセス
     const url = new URL(data.path, LOCAL_HOST);
 
-    // Queryパラメータを追加
-    if (data.query) {
+    if (data.query && typeof data.query === "object") {
       Object.entries(data.query).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {
           url.searchParams.append(key, String(value));
@@ -45,15 +52,10 @@ socket.on(TUNNEL_EVENTS.REQUEST_INCOMING, async (data: IncomingRequest) => {
       });
     }
 
-    // プロキシに不要なヘッダーを除外
-    const excludeHeaders = [
-      "host",
-      "connection",
-      "content-length",
-      "transfer-encoding",
-      "upgrade",
-    ];
+    // ヘッダー処理
     const forwardHeaders: Record<string, string> = {};
+    const excludeHeaders = ["host", "connection", "content-length", "upgrade"];
+
     if (data.headers) {
       Object.entries(data.headers).forEach(([key, value]) => {
         if (!excludeHeaders.includes(key.toLowerCase())) {
@@ -62,7 +64,8 @@ socket.on(TUNNEL_EVENTS.REQUEST_INCOMING, async (data: IncomingRequest) => {
       });
     }
 
-    // Content-Typeが指定されていない場合のみデフォルトを設定
+    forwardHeaders["accept-encoding"] = "identity";
+
     if (
       !forwardHeaders["content-type"] &&
       data.body &&
@@ -76,69 +79,50 @@ socket.on(TUNNEL_EVENTS.REQUEST_INCOMING, async (data: IncomingRequest) => {
       headers: forwardHeaders,
     };
 
-    // Bodyがある場合のみ追加
-    if (data.body !== undefined && data.body !== null) {
-      if (typeof data.body === "string") {
-        fetchOptions.body = data.body;
-      } else {
-        fetchOptions.body = JSON.stringify(data.body);
-      }
+    if (data.body) {
+      fetchOptions.body =
+        typeof data.body === "string" ? data.body : JSON.stringify(data.body);
     }
 
-    console.log(`🔄 Forwarding to: ${url.toString()}`);
+    // フェッチ実行
     const response = await fetch(url.toString(), fetchOptions);
 
-    // レスポンスヘッダーを取得
+    // レスポンスヘッダー処理
     const responseHeaders: Record<string, string> = {};
+    const excludeResHeaders = [
+      "content-encoding",
+      "content-length",
+      "connection",
+      "transfer-encoding",
+    ];
+
     response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
+      if (!excludeResHeaders.includes(key.toLowerCase())) {
+        responseHeaders[key] = value;
+      }
     });
 
-    // レスポンスボディを取得
-    const contentType = response.headers.get("content-type");
-    let body: any;
-    if (contentType && contentType.includes("application/json")) {
-      body = await response.json();
-    } else {
-      body = await response.text();
-    }
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
 
-    // Step 2: レスポンスをServerに送り返す
     const responseData: OutgoingResponse = {
       requestId: data.requestId,
-      statusCode: response.status,
-      statusText: response.statusText,
+      status: response.status,
       headers: responseHeaders,
-      body: body,
+      body: buffer,
     };
 
     console.log(
-      `✅ Received response: ${response.status} ${response.statusText}`
+      `✅ Response: ${response.status} (Size: ${buffer.length} bytes)`
     );
-    console.log(
-      `📤 Sending response back to Server (Request ID: ${data.requestId})`
-    );
-
     socket.emit(TUNNEL_EVENTS.RESPONSE_OUTGOING, responseData);
   } catch (error) {
-    console.error(`❌ Error forwarding request:`, error);
-
-    // エラーレスポンスを送信
-    const errorResponse: OutgoingResponse = {
+    console.error(`❌ Error:`, error);
+    socket.emit(TUNNEL_EVENTS.RESPONSE_OUTGOING, {
       requestId: data.requestId,
-      statusCode: 502,
-      statusText: "Bad Gateway",
-      headers: { "Content-Type": "application/json" },
-      body: {
-        error: "Failed to forward request to local server",
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
-
-    socket.emit(TUNNEL_EVENTS.RESPONSE_OUTGOING, errorResponse);
+      status: 502,
+      headers: { "content-type": "application/json" },
+      body: { error: "Gateway Error", details: String(error) },
+    });
   }
-});
-
-socket.on("connect_error", (err) => {
-  console.error("Connection Error:", err.message);
 });

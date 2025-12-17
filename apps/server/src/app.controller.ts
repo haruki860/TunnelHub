@@ -19,18 +19,11 @@ export class AppController {
     const requestId = uuidv4();
     const requestPath = req.originalUrl || req.url || '/';
 
-    console.log(
-      `🌍 HTTP Request: ${req.method} ${requestPath} (ID: ${requestId})`,
-    );
-
-    // ヘッダーの型変換
+    // ヘッダー変換
     const safeHeaders = Object.entries(req.headers).reduce(
       (acc, [key, value]) => {
-        if (typeof value === 'string') {
-          acc[key] = value;
-        } else if (Array.isArray(value)) {
-          acc[key] = value.join(',');
-        }
+        if (typeof value === 'string') acc[key] = value;
+        else if (Array.isArray(value)) acc[key] = value.join(',');
         return acc;
       },
       {} as Record<string, string>,
@@ -46,11 +39,10 @@ export class AppController {
     };
 
     try {
-      // ★超シンプル化: Gatewayを呼ぶだけ！待機処理はGatewayがやってくれる
       const clientResponse =
         await this.eventsGateway.broadcastRequest(requestData);
 
-      // レスポンス処理
+      // ヘッダー設定
       if (clientResponse.headers) {
         Object.entries(clientResponse.headers).forEach(([key, value]) => {
           res.setHeader(key, value);
@@ -59,14 +51,14 @@ export class AppController {
 
       res.status(clientResponse.status);
 
-      const contentType = clientResponse.headers?.['content-type'] || '';
-      if (
-        contentType.includes('application/json') &&
-        typeof clientResponse.body === 'object'
-      ) {
-        res.json(clientResponse.body);
+      // ★バイナリ対応: Bufferならそのままsend、それ以外はJSON判定
+      const body = clientResponse.body;
+      if (Buffer.isBuffer(body)) {
+        res.send(body);
+      } else if (typeof body === 'object') {
+        res.json(body);
       } else {
-        res.send(clientResponse.body);
+        res.send(body);
       }
 
       // ログ送信
@@ -79,10 +71,8 @@ export class AppController {
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
-      // タイムアウト等のエラー処理
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown Error';
-      console.error(`❌ Request Failed: ${errorMessage}`);
+      console.error(`❌ Request Failed: ${error}`);
+      res.status(504).json({ error: 'Gateway Timeout' });
 
       this.eventsGateway.broadcastLog({
         requestId,
@@ -91,11 +81,6 @@ export class AppController {
         status: 504,
         duration: Date.now() - startTime,
         timestamp: new Date().toISOString(),
-      });
-
-      res.status(504).json({
-        error: 'Gateway Timeout',
-        message: 'The tunnel client did not respond in time.',
       });
     }
   }
