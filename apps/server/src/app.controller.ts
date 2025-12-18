@@ -30,35 +30,24 @@ export class AppController {
     if (req.query['tunnel_id']) {
       const incomingId = req.query['tunnel_id'] as string;
 
-      // ★重要: クッキーをセットして、クエリパラメータを消したURLへリダイレクト
-      // これにより、以降はCookieで認証されます
+      // Cookieをセットして、クエリパラメータを消したURLへリダイレクト
       res.setHeader(
         'Set-Cookie',
         `tunnel_id=${incomingId}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`,
       );
 
-      // 現在のURLから tunnel_id パラメータを削除してリダイレクト
       const protocol = req.protocol;
       const host = req.get('host');
-      const cleanUrl = new URL(
-        `${protocol}://${host}${req.originalUrl.split('?')[0]}`,
-      );
+      // クエリパラメータなしのURLを構築
+      const cleanUrl = new URL(`${protocol}://${host}${req.path}`);
 
-      // 他のクエリパラメータがあれば維持する
+      // tunnel_id以外のパラメータがあれば維持する
       Object.entries(req.query).forEach(([key, value]) => {
-        if (key !== 'tunnel_id' && value !== undefined) {
-          if (typeof value === 'string') {
-            cleanUrl.searchParams.append(key, value);
-          } else if (Array.isArray(value)) {
-            // 配列の場合、文字列要素のみを結合
-            const stringValues = value.filter(
-              (v): v is string => typeof v === 'string',
-            );
-            if (stringValues.length > 0) {
-              cleanUrl.searchParams.append(key, stringValues.join(','));
-            }
-          }
-          // オブジェクトや他の型は無視
+        if (key !== 'tunnel_id') {
+          cleanUrl.searchParams.append(
+            key,
+            typeof value === 'string' ? value : JSON.stringify(value),
+          );
         }
       });
 
@@ -90,11 +79,8 @@ export class AppController {
     if (!targetTunnelId) {
       if (req.path.startsWith('/socket.io')) return;
 
-      // ★重要: Renderの環境変数で設定したURLを使う
-      // 設定がない場合は localhost:3001 (開発用)
       const webUrl =
         this.configService.get<string>('webUrl') || 'http://localhost:3001';
-
       const protocol = req.protocol;
       const host = req.get('host');
       const originalFullUrl = `${protocol}://${host}${req.originalUrl}`;
@@ -108,11 +94,28 @@ export class AppController {
     // 3. トンネル情報の取得と接続チェック
     const tunnelInfo = this.eventsGateway.getTunnelInfo(targetTunnelId);
 
+    // ★修正箇所: IDが見つからない場合、502エラーではなく入力画面へ戻す
     if (!tunnelInfo) {
-      res.status(502).json({
-        error: 'Bad Gateway',
-        message: `Tunnel ID "${targetTunnelId}" is not connected.`,
-      });
+      console.log(
+        `⚠️ Tunnel ID "${targetTunnelId}" not found. Clearing cookie and redirecting.`,
+      );
+
+      // ゾンビCookieを削除 (Max-Age=0)
+      res.setHeader(
+        'Set-Cookie',
+        'tunnel_id=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax',
+      );
+
+      // Entryページへリダイレクト
+      const webUrl =
+        this.configService.get<string>('webUrl') || 'http://localhost:3001';
+      const protocol = req.protocol;
+      const host = req.get('host');
+      const originalFullUrl = `${protocol}://${host}${req.originalUrl}`;
+
+      res.redirect(
+        `${webUrl}/entry?returnUrl=${encodeURIComponent(originalFullUrl)}`,
+      );
       return;
     }
 
@@ -153,7 +156,6 @@ export class AppController {
     );
 
     delete safeHeaders['authorization'];
-    // 転送時にCookieも削除しておくと安全（ローカルアプリには不要なので）
     delete safeHeaders['cookie'];
 
     const requestData: IncomingRequest = {
