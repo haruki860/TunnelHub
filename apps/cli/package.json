@@ -1,13 +1,13 @@
 {
   "name": "cli",
   "version": "1.0.0",
-  "description": "",
+  "description": "TunnelHub CLI Client",
   "type": "module",
-  "main": "index.js",
+  "main": "index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx index.ts -p 5173 -s http://localhost:3000",
-    "prod": "tsx index.ts -p 5173 -s https://tunnelhub.onrender.com"
+    "start": "tsx index.ts -p 5173 -s https://tunnelhub.onrender.com"
   },
   "keywords": [],
   "author": "",

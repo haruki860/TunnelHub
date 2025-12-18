@@ -30,14 +30,24 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   server: Server;
 
   private responseSubjects = new Map<string, Subject<OutgoingResponse>>();
-
   private tunnelConnections = new Map<string, TunnelInfo>();
 
   async handleConnection(client: Socket) {
     const tunnelId = client.handshake.query.tunnelId as string;
+    const type = client.handshake.query.type as string; // 'dashboard' かどうか
     const password = client.handshake.auth.password as string;
 
     if (tunnelId) {
+      // ★変更: ダッシュボード（閲覧者）の場合
+      if (type === 'dashboard') {
+        await client.join(tunnelId);
+        console.log(`👀 Dashboard connected to room: ${tunnelId}`);
+        return;
+      }
+
+      // --- 以下、CLI (Host) の接続処理 ---
+
+      // 重複チェック
       if (this.tunnelConnections.has(tunnelId)) {
         console.log(
           `⚠️ Tunnel ID conflict: ${tunnelId}. Disconnecting new client.`,
@@ -47,7 +57,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       await client.join(tunnelId);
-
       this.tunnelConnections.set(tunnelId, { socketId: client.id, password });
 
       console.log(
@@ -61,7 +70,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   handleDisconnect(client: Socket) {
-    console.log(`❌ Client Disconnected: ${client.id}`);
+    // CLIが切断された場合のみマップから削除
     for (const [tid, info] of this.tunnelConnections.entries()) {
       if (info.socketId === client.id) {
         this.tunnelConnections.delete(tid);
@@ -77,10 +86,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage(TUNNEL_EVENTS.RESPONSE_OUTGOING)
   handleResponse(@MessageBody() response: OutgoingResponse): void {
-    console.log(
-      `📩 [Server] Received Response: ${response.requestId} (Status: ${response.status})`,
-    );
-
     const subject = this.responseSubjects.get(response.requestId);
     if (subject) {
       subject.next(response);
@@ -96,22 +101,19 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const responseSubject = new Subject<OutgoingResponse>();
     this.responseSubjects.set(requestData.requestId, responseSubject);
 
-    console.log(
-      `🚀 [Server] Sending Request to CLI (Tunnel: ${targetTunnelId}): ${requestData.requestId}`,
-    );
-
-    const roomSize =
-      this.server.sockets.adapter.rooms.get(targetTunnelId)?.size || 0;
-
-    if (roomSize === 0) {
+    // CLIが接続されているか確認
+    if (!this.tunnelConnections.has(targetTunnelId)) {
       this.responseSubjects.delete(requestData.requestId);
-      console.warn(`⚠️ No CLI connected for tunnel: ${targetTunnelId}`);
       throw new Error(`Tunnel ${targetTunnelId} is not connected`);
     }
 
-    this.server
-      .to(targetTunnelId)
-      .emit(TUNNEL_EVENTS.REQUEST_INCOMING, requestData);
+    // CLIへリクエスト送信 (HostのSocketIDを特定して送る)
+    const hostSocketId = this.tunnelConnections.get(targetTunnelId)?.socketId;
+    if (hostSocketId) {
+      this.server
+        .to(hostSocketId)
+        .emit(TUNNEL_EVENTS.REQUEST_INCOMING, requestData);
+    }
 
     try {
       return await firstValueFrom(responseSubject.pipe(timeout(60000)));
@@ -124,7 +126,8 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  broadcastLog(log: RequestLog): void {
-    this.server.emit(TUNNEL_EVENTS.NEW_LOG, log);
+  // ★変更: ログを指定された部屋(tunnelId)だけに送る
+  broadcastLog(tunnelId: string, log: RequestLog): void {
+    this.server.to(tunnelId).emit(TUNNEL_EVENTS.NEW_LOG, log);
   }
 }

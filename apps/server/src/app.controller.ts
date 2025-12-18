@@ -190,7 +190,7 @@ export class AppController {
         res.send(body);
       }
 
-      this.eventsGateway.broadcastLog({
+      this.eventsGateway.broadcastLog(targetTunnelId, {
         requestId,
         method: req.method,
         path: requestPath,
@@ -208,7 +208,7 @@ export class AppController {
         });
       }
 
-      this.eventsGateway.broadcastLog({
+      this.eventsGateway.broadcastLog(targetTunnelId, {
         requestId,
         method: req.method,
         path: requestPath,
