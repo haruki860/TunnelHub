@@ -1,7 +1,7 @@
 export const TUNNEL_EVENTS = {
-  REQUEST_INCOMING: 'request-incoming',
-  RESPONSE_OUTGOING: 'response-outgoing',
-  NEW_LOG: 'new-log',
+  REQUEST_INCOMING: "request-incoming",
+  RESPONSE_OUTGOING: "response-outgoing",
+  NEW_LOG: "new-log",
 } as const;
 
 export interface IncomingRequest {
@@ -15,7 +15,7 @@ export interface IncomingRequest {
 
 export interface OutgoingResponse {
   requestId: string;
-  status: number; // statusCode ではなく status に統一
+  status: number;
   statusCode: number;
   statusText: string;
   body: unknown;
@@ -29,4 +29,7 @@ export interface RequestLog {
   status: number;
   duration: number;
   timestamp: string;
+  headers?: Record<string, string> | null;
+  body?: unknown;
+  query?: unknown;
 }
