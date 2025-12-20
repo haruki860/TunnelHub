@@ -1,17 +1,114 @@
-import { Controller, All, Req, Body, Query, Res } from '@nestjs/common';
+import {
+  Controller,
+  All,
+  Req,
+  Body,
+  Query,
+  Res,
+  Post,
+  Param,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventsGateway } from './events.gateway';
 import { IncomingRequest } from '@tunnel-hub/shared';
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import { PrismaService } from './prisma.service';
 
 @Controller()
 export class AppController {
   constructor(
     private readonly eventsGateway: EventsGateway,
     private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
   ) {}
 
+  // ==========================================
+  // ★追加: リクエスト再送機能 (Request Replay)
+  // ==========================================
+  @Post('api/replay/:logId')
+  async replayRequest(@Param('logId') logId: string) {
+    console.log(`🔄 Replaying request log ID: ${logId}`);
+
+    // 1. DBから過去のログを取得
+    const oldLog = await this.prisma.requestLog.findUnique({
+      where: { id: logId },
+    });
+
+    if (!oldLog) {
+      throw new HttpException('Log not found', HttpStatus.NOT_FOUND);
+    }
+
+    // 2. 必須データがあるか確認
+    if (!oldLog.headers || !oldLog.method || !oldLog.path) {
+      throw new HttpException(
+        'Cannot replay this request (Missing details)',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // 3. 新しいリクエストIDを発行
+    const newRequestId = uuidv4();
+
+    // 4. データ復元 (ESLintエラー回避のために as any を使用)
+    const headers = oldLog.headers as Record<string, string>;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const body = oldLog.body as any;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const query = oldLog.query as any;
+
+    const requestData: IncomingRequest = {
+      requestId: newRequestId,
+      method: oldLog.method,
+      path: oldLog.path,
+      headers: headers,
+      body: body,
+      query: query,
+    };
+
+    // 5. CLIへ送信
+    try {
+      const startTime = Date.now();
+      const clientResponse = await this.eventsGateway.broadcastRequest(
+        requestData,
+        oldLog.tunnelId,
+      );
+
+      // 6. 結果を新しいログとして保存
+      void this.eventsGateway.broadcastLog(oldLog.tunnelId, {
+        requestId: newRequestId,
+        method: oldLog.method,
+        path: oldLog.path,
+        status: clientResponse.status,
+        duration: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+        headers: headers,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        body: body,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        query: query,
+      });
+
+      return {
+        success: true,
+        message: 'Request replayed successfully',
+        newLogId: newRequestId,
+        status: clientResponse.status,
+      };
+    } catch (error) {
+      console.error(`❌ Replay Failed:`, error);
+      throw new HttpException(
+        'Tunnel client did not respond',
+        HttpStatus.GATEWAY_TIMEOUT,
+      );
+    }
+  }
+
+  // ==========================================
+  // 通常のリクエスト処理
+  // ==========================================
   @All('*')
   async receiveHttp(
     @Req() req: Request,
@@ -23,7 +120,7 @@ export class AppController {
     const requestId = uuidv4();
     const requestPath = req.originalUrl || req.url || '/';
 
-    // ★ノイズ除去: 画像やCSSなどはログ保存しない
+    // ノイズ除去
     const IGNORED_EXTENSIONS = [
       '.ico',
       '.png',
@@ -47,7 +144,7 @@ export class AppController {
     // 1. Tunnel IDの特定
     let targetTunnelId = '';
 
-    // A. クエリパラメータからの取得
+    // A. クエリパラメータ
     if (req.query['tunnel_id']) {
       const incomingId = req.query['tunnel_id'] as string;
       res.setHeader(
@@ -89,10 +186,10 @@ export class AppController {
       }
     }
 
-    // 2. IDがない場合: Web側の入力画面へリダイレクト
+    // 2. IDがない場合
     if (!targetTunnelId) {
       if (req.path.startsWith('/socket.io')) return;
-      if (req.path.startsWith('/api/')) return; // API系はスルー
+      if (req.path.startsWith('/api/')) return;
 
       const webUrl =
         this.configService.get<string>('webUrl') || 'http://localhost:3001';
@@ -109,9 +206,7 @@ export class AppController {
     const tunnelInfo = this.eventsGateway.getTunnelInfo(targetTunnelId);
 
     if (!tunnelInfo) {
-      console.log(
-        `⚠️ Tunnel ID "${targetTunnelId}" not found. Clearing cookie and redirecting.`,
-      );
+      console.log(`⚠️ Tunnel ID "${targetTunnelId}" not found.`);
       res.setHeader(
         'Set-Cookie',
         'tunnel_id=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax',
@@ -158,7 +253,6 @@ export class AppController {
       },
       {} as Record<string, string>,
     );
-
     delete safeHeaders['authorization'];
     delete safeHeaders['cookie'];
 
@@ -184,7 +278,6 @@ export class AppController {
       }
 
       res.status(clientResponse.status);
-
       const responseBody = clientResponse.body;
       if (Buffer.isBuffer(responseBody)) {
         res.send(responseBody);
@@ -194,7 +287,7 @@ export class AppController {
         res.send(responseBody);
       }
 
-      // ★ログ保存 (詳細データ付き & ノイズ除去)
+      // ログ保存 (詳細データ付き & ノイズ除去)
       if (!isIgnoredLog) {
         void this.eventsGateway.broadcastLog(targetTunnelId, {
           requestId,
@@ -203,7 +296,7 @@ export class AppController {
           status: clientResponse.status,
           duration: Date.now() - startTime,
           timestamp: new Date().toISOString(),
-          // ★ここが重要: 再送用に中身を保存
+          // ★再送用に保存
           headers: requestData.headers,
           body: requestData.body,
           query: requestData.query,
@@ -211,15 +304,12 @@ export class AppController {
       }
     } catch (error) {
       console.error(`❌ Request Failed for ${targetTunnelId}:`, error);
-
       if (!res.headersSent) {
         res.status(504).json({
           error: 'Gateway Timeout',
           message: `Tunnel ID "${targetTunnelId}" failed to respond.`,
         });
       }
-
-      // ★エラー時も詳細ログ保存
       if (!isIgnoredLog) {
         void this.eventsGateway.broadcastLog(targetTunnelId, {
           requestId,

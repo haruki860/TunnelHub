@@ -1,67 +1,42 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
+import { useParams } from "next/navigation";
 
-interface PageProps {
-  params: Promise<{ tunnelId: string }>;
-}
-
-interface RequestLog {
+interface Log {
   requestId: string;
   method: string;
   path: string;
   status: number;
   duration: number;
   timestamp: string;
+  headers?: Record<string, string> | null;
+  body?: unknown;
 }
 
-export default function DashboardPage({ params }: PageProps) {
-  const { tunnelId } = use(params);
-
-  const [logs, setLogs] = useState<RequestLog[]>([]);
+export default function TunnelPage() {
+  const params = useParams();
+  const tunnelId = params.tunnelId as string;
+  const [logs, setLogs] = useState<Log[]>([]);
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    const SERVER_URL =
-      process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3000";
+    // 1. 初回データ取得 (REST API)
+    fetch(`http://localhost:3000/api/logs/${tunnelId}`)
+      .then((res) => res.json())
+      .then((data) => setLogs(data))
+      .catch((err) => console.error("Failed to fetch logs:", err));
 
-    // 1. 過去ログの取得 (API)
-    const fetchLogs = async () => {
-      try {
-        const res = await fetch(`${SERVER_URL}/api/logs/${tunnelId}`);
-        if (res.ok) {
-          const pastLogs: RequestLog[] = await res.json();
-          setLogs(pastLogs);
-        } else {
-          console.error("Failed to fetch logs");
-        }
-      } catch (err) {
-        console.error("Error fetching logs:", err);
-      }
-    };
-
-    fetchLogs();
-
-    // 2. リアルタイム接続 (Socket.io)
-    const socket = io(SERVER_URL, {
-      query: {
-        tunnelId: tunnelId,
-        type: "dashboard",
-      },
+    // 2. リアルタイム更新 (WebSocket)
+    const socket = io("http://localhost:3000", {
+      query: { tunnelId, type: "dashboard" },
     });
 
-    socket.on("connect", () => {
-      console.log(`Connected to Dashboard Room: ${tunnelId}`);
-      setIsConnected(true);
-    });
+    socket.on("connect", () => setIsConnected(true));
+    socket.on("disconnect", () => setIsConnected(false));
 
-    socket.on("disconnect", () => {
-      setIsConnected(false);
-    });
-
-    socket.on("new-log", (newLog: RequestLog) => {
-      // 新しいログを先頭に追加
+    socket.on("new-log", (newLog: Log) => {
       setLogs((prev) => [newLog, ...prev]);
     });
 
@@ -70,102 +45,138 @@ export default function DashboardPage({ params }: PageProps) {
     };
   }, [tunnelId]);
 
+  // ★追加: 再送ボタンの処理
+  const handleReplay = async (logId: string) => {
+    try {
+      // サーバーの再送APIを叩く
+      const res = await fetch(`http://localhost:3000/api/replay/${logId}`, {
+        method: "POST",
+      });
+
+      if (res.ok) {
+        // 成功時の簡易フィードバック
+        alert("🚀 リクエストを再送しました！");
+      } else {
+        const err = await res.json();
+        alert(`❌ 再送失敗: ${err.message}`);
+      }
+    } catch (error) {
+      console.error("Replay error:", error);
+      alert("❌ エラーが発生しました");
+    }
+  };
+
+  const getMethodColor = (method: string) => {
+    switch (method) {
+      case "GET":
+        return "text-green-600";
+      case "POST":
+        return "text-blue-600";
+      case "PUT":
+        return "text-orange-600";
+      case "DELETE":
+        return "text-red-600";
+      default:
+        return "text-gray-600";
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-8">
-      <header className="mb-8 flex justify-between items-center border-b border-gray-700 pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-blue-400">
-            TunnelHub Dashboard
-          </h1>
-          <p className="text-gray-400 text-sm mt-1">
-            Viewing logs for:{" "}
-            <span className="text-white font-mono bg-gray-800 px-2 py-0.5 rounded">
-              {tunnelId}
-            </span>
-          </p>
-        </div>
-        <div
-          className={`px-4 py-2 rounded-full text-sm font-bold ${
-            isConnected
-              ? "bg-green-900 text-green-300"
-              : "bg-red-900 text-red-300"
-          }`}
-        >
-          {isConnected ? "● Live" : "○ Offline"}
-        </div>
-      </header>
-
+    <div className="min-h-screen bg-gray-100 p-8">
       <div className="max-w-5xl mx-auto">
-        {logs.length === 0 ? (
-          <div className="text-center py-20 text-gray-500 bg-gray-800/50 rounded-xl border border-dashed border-gray-700">
-            <p>No requests yet.</p>
-            <p className="text-sm mt-2">Access your tunnel to see logs here.</p>
+        <header className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-800">
+              Tunnel Dashboard
+            </h1>
+            <p className="text-gray-500 mt-1">
+              Tunnel ID:{" "}
+              <span className="font-mono font-medium text-gray-700">
+                {tunnelId}
+              </span>
+            </p>
           </div>
-        ) : (
-          <div className="space-y-3">
-            {logs.map((log) => (
-              <div
-                key={log.requestId} // requestIdがユニークキーになるので安心
-                className="bg-gray-800 p-4 rounded-lg border border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between shadow-lg hover:border-gray-600 transition-colors"
-              >
-                <div className="flex items-center gap-4 mb-2 sm:mb-0 overflow-hidden">
-                  <span
-                    className={`font-bold px-2 py-1 rounded text-xs w-16 text-center shrink-0 ${getMethodColor(
-                      log.method
-                    )}`}
-                  >
-                    {log.method}
-                  </span>
-                  <span
-                    className="font-mono text-gray-300 text-sm truncate"
-                    title={log.path}
-                  >
-                    {log.path}
-                  </span>
-                </div>
+          <div className="flex items-center gap-2">
+            <div
+              className={`w-3 h-3 rounded-full ${
+                isConnected ? "bg-green-500" : "bg-red-500"
+              }`}
+            />
+            <span className="text-sm text-gray-600">
+              {isConnected ? "Live" : "Connecting..."}
+            </span>
+          </div>
+        </header>
 
-                <div className="flex items-center gap-4 sm:gap-6 shrink-0 ml-auto">
-                  <span
-                    className={`font-bold text-sm ${getStatusColor(
-                      log.status
-                    )}`}
-                  >
-                    {log.status}
-                  </span>
-                  <span className="text-xs text-gray-400 w-16 text-right">
-                    {log.duration}ms
-                  </span>
-                  <span className="text-xs text-gray-500 w-20 text-right">
-                    {new Date(log.timestamp).toLocaleTimeString()}
-                  </span>
-                </div>
-              </div>
-            ))}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+            <h2 className="font-semibold text-gray-700">Request Logs</h2>
+            <span className="text-sm text-gray-500">
+              {logs.length} requests
+            </span>
           </div>
-        )}
+
+          <div className="divide-y divide-gray-100">
+            {logs.length === 0 ? (
+              <div className="p-8 text-center text-gray-400">
+                No requests yet. Waiting for traffic...
+              </div>
+            ) : (
+              logs.map((log) => (
+                <div
+                  key={log.requestId}
+                  className="p-4 hover:bg-gray-50 transition-colors group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <span
+                        className={`font-mono font-bold w-16 ${getMethodColor(
+                          log.method
+                        )}`}
+                      >
+                        {log.method}
+                      </span>
+                      <span className="font-mono text-gray-700 text-sm break-all">
+                        {log.path}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <div
+                          className={`font-mono font-bold text-sm ${
+                            log.status >= 400
+                              ? "text-red-600"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {log.status}
+                        </div>
+                        <div className="text-xs text-gray-400">
+                          {log.duration}ms
+                        </div>
+                      </div>
+
+                      {/* ★追加: Replayボタン (group-hoverで表示) */}
+                      <button
+                        onClick={() => handleReplay(log.requestId)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity px-3 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200"
+                        title="Replay this request"
+                      >
+                        🔄 Replay
+                      </button>
+
+                      <div className="text-xs text-gray-400 w-20 text-right">
+                        {new Date(log.timestamp).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
-}
-
-function getMethodColor(method: string) {
-  switch (method) {
-    case "GET":
-      return "bg-blue-900 text-blue-200";
-    case "POST":
-      return "bg-green-900 text-green-200";
-    case "PUT":
-      return "bg-yellow-900 text-yellow-200";
-    case "DELETE":
-      return "bg-red-900 text-red-200";
-    default:
-      return "bg-gray-700 text-gray-200";
-  }
-}
-
-function getStatusColor(status: number) {
-  if (status >= 500) return "text-red-400";
-  if (status >= 400) return "text-yellow-400";
-  if (status >= 200) return "text-green-400";
-  return "text-gray-500";
 }
