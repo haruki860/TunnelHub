@@ -15,6 +15,7 @@ import {
 } from '@tunnel-hub/shared';
 import { Subject, firstValueFrom } from 'rxjs';
 import { timeout } from 'rxjs/operators';
+import { PrismaService } from './prisma.service'; // ★追加
 
 export interface TunnelInfo {
   socketId: string;
@@ -32,22 +33,21 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private responseSubjects = new Map<string, Subject<OutgoingResponse>>();
   private tunnelConnections = new Map<string, TunnelInfo>();
 
+  // ★追加: DB操作サービスを注入
+  constructor(private readonly prisma: PrismaService) {}
+
   async handleConnection(client: Socket) {
     const tunnelId = client.handshake.query.tunnelId as string;
-    const type = client.handshake.query.type as string; // 'dashboard' かどうか
+    const type = client.handshake.query.type as string;
     const password = client.handshake.auth.password as string;
 
     if (tunnelId) {
-      // ★変更: ダッシュボード（閲覧者）の場合
       if (type === 'dashboard') {
         await client.join(tunnelId);
         console.log(`👀 Dashboard connected to room: ${tunnelId}`);
         return;
       }
 
-      // --- 以下、CLI (Host) の接続処理 ---
-
-      // 重複チェック
       if (this.tunnelConnections.has(tunnelId)) {
         console.log(
           `⚠️ Tunnel ID conflict: ${tunnelId}. Disconnecting new client.`,
@@ -70,7 +70,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   handleDisconnect(client: Socket) {
-    // CLIが切断された場合のみマップから削除
     for (const [tid, info] of this.tunnelConnections.entries()) {
       if (info.socketId === client.id) {
         this.tunnelConnections.delete(tid);
@@ -101,13 +100,11 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const responseSubject = new Subject<OutgoingResponse>();
     this.responseSubjects.set(requestData.requestId, responseSubject);
 
-    // CLIが接続されているか確認
     if (!this.tunnelConnections.has(targetTunnelId)) {
       this.responseSubjects.delete(requestData.requestId);
       throw new Error(`Tunnel ${targetTunnelId} is not connected`);
     }
 
-    // CLIへリクエスト送信 (HostのSocketIDを特定して送る)
     const hostSocketId = this.tunnelConnections.get(targetTunnelId)?.socketId;
     if (hostSocketId) {
       this.server
@@ -126,8 +123,34 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  // ★変更: ログを指定された部屋(tunnelId)だけに送る
-  broadcastLog(tunnelId: string, log: RequestLog): void {
+  // ★変更: DBへの保存処理を追加
+  async broadcastLog(tunnelId: string, log: RequestLog): Promise<void> {
+    // 1. リアルタイム配信 (ダッシュボード用)
     this.server.to(tunnelId).emit(TUNNEL_EVENTS.NEW_LOG, log);
+
+    // 2. DBへの永続化 (Supabaseへ保存)
+    try {
+      await this.prisma.requestLog.create({
+        data: {
+          requestId: log.requestId,
+          method: log.method,
+          path: log.path,
+          status: log.status,
+          duration: log.duration,
+          timestamp: new Date(log.timestamp),
+          // Tunnelが存在しなければ自動作成して紐付ける
+          tunnel: {
+            connectOrCreate: {
+              where: { subdomain: tunnelId },
+              create: { subdomain: tunnelId },
+            },
+          },
+        },
+      });
+      // console.log(`💾 Log saved to DB for ${tunnelId}`);
+    } catch (error) {
+      console.error('❌ Failed to save log to DB:', error);
+      // DBエラーでも通信は止めない
+    }
   }
 }

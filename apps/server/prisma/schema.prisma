@@ -1,0 +1,55 @@
+// apps/server/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // ハッシュ化、またはSupabase Auth連携ならIDのみ
+  createdAt DateTime @default(now())
+  
+  tunnels   Tunnel[]
+}
+
+model Tunnel {
+  id          String   @id @default(uuid())
+  subdomain   String   @unique // 現在の tunnelId
+  apiKey      String   @unique @default(uuid()) // 将来のAPI Key
+  
+  // 今は必須にせず、あとでユーザー機能を実装したら必須にする
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  
+  logs        RequestLog[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model RequestLog {
+  id        String   @id @default(uuid())
+  requestId String
+  method    String
+  path      String
+  status    Int
+  duration  Int
+  
+  // ★重要: ログの中身も保存したい場合、Text型にする（容量注意！）
+  // 画像などのバイナリは保存せず、JSONやテキストのみにする運用でいく
+  bodyPreview String?  @db.Text 
+  
+  timestamp DateTime @default(now())
+  
+  tunnelId  String
+  tunnel    Tunnel   @relation(fields: [tunnelId], references: [id])
+  
+  // インデックスを貼っておくと削除処理が速くなる
+  @@index([timestamp])
+}

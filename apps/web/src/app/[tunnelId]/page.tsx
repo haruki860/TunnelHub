@@ -3,7 +3,6 @@
 import { useEffect, useState, use } from "react";
 import { io } from "socket.io-client";
 
-// Next.js 15+ / React 19 では params は Promise になりました
 interface PageProps {
   params: Promise<{ tunnelId: string }>;
 }
@@ -18,7 +17,6 @@ interface RequestLog {
 }
 
 export default function DashboardPage({ params }: PageProps) {
-  // use() フックで Promise をアンラップ
   const { tunnelId } = use(params);
 
   const [logs, setLogs] = useState<RequestLog[]>([]);
@@ -28,7 +26,24 @@ export default function DashboardPage({ params }: PageProps) {
     const SERVER_URL =
       process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3000";
 
-    // ★重要: type: 'dashboard' をつけて、ホストではなく「閲覧者」として接続
+    // 1. 過去ログの取得 (API)
+    const fetchLogs = async () => {
+      try {
+        const res = await fetch(`${SERVER_URL}/api/logs/${tunnelId}`);
+        if (res.ok) {
+          const pastLogs: RequestLog[] = await res.json();
+          setLogs(pastLogs);
+        } else {
+          console.error("Failed to fetch logs");
+        }
+      } catch (err) {
+        console.error("Error fetching logs:", err);
+      }
+    };
+
+    fetchLogs();
+
+    // 2. リアルタイム接続 (Socket.io)
     const socket = io(SERVER_URL, {
       query: {
         tunnelId: tunnelId,
@@ -46,6 +61,7 @@ export default function DashboardPage({ params }: PageProps) {
     });
 
     socket.on("new-log", (newLog: RequestLog) => {
+      // 新しいログを先頭に追加
       setLogs((prev) => [newLog, ...prev]);
     });
 
@@ -89,7 +105,7 @@ export default function DashboardPage({ params }: PageProps) {
           <div className="space-y-3">
             {logs.map((log) => (
               <div
-                key={log.requestId}
+                key={log.requestId} // requestIdがユニークキーになるので安心
                 className="bg-gray-800 p-4 rounded-lg border border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between shadow-lg hover:border-gray-600 transition-colors"
               >
                 <div className="flex items-center gap-4 mb-2 sm:mb-0 overflow-hidden">
