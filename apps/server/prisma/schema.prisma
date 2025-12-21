@@ -12,7 +12,7 @@ datasource db {
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
-  password  String   // ハッシュ化、またはSupabase Auth連携ならIDのみ
+  password  String
   createdAt DateTime @default(now())
   
   tunnels   Tunnel[]
@@ -20,10 +20,9 @@ model User {
 
 model Tunnel {
   id          String   @id @default(uuid())
-  subdomain   String   @unique // 現在の tunnelId
-  apiKey      String   @unique @default(uuid()) // 将来のAPI Key
+  subdomain   String   @unique // これを外部キーとして使う
+  apiKey      String   @unique @default(uuid())
   
-  // 今は必須にせず、あとでユーザー機能を実装したら必須にする
   userId      String?
   user        User?    @relation(fields: [userId], references: [id])
   
@@ -41,15 +40,17 @@ model RequestLog {
   status    Int
   duration  Int
   
-  // ★重要: ログの中身も保存したい場合、Text型にする（容量注意！）
-  // 画像などのバイナリは保存せず、JSONやテキストのみにする運用でいく
   bodyPreview String?  @db.Text 
   
   timestamp DateTime @default(now())
+
+  // ★追加したフィールド (OK!)
+  headers   Json?
+  body      Json?
+  query     Json?
   
   tunnelId  String
-  tunnel    Tunnel   @relation(fields: [tunnelId], references: [id])
+  tunnel    Tunnel   @relation(fields: [tunnelId], references: [subdomain])
   
-  // インデックスを貼っておくと削除処理が速くなる
   @@index([timestamp])
 }
