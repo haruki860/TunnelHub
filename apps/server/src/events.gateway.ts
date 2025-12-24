@@ -15,7 +15,7 @@ import {
 } from '@tunnel-hub/shared';
 import { Subject, firstValueFrom } from 'rxjs';
 import { timeout } from 'rxjs/operators';
-import { PrismaService } from './prisma.service'; // ★追加
+import { PrismaService } from './prisma.service';
 
 export interface TunnelInfo {
   socketId: string;
@@ -33,7 +33,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private responseSubjects = new Map<string, Subject<OutgoingResponse>>();
   private tunnelConnections = new Map<string, TunnelInfo>();
 
-  // ★追加: DB操作サービスを注入
   constructor(private readonly prisma: PrismaService) {}
 
   async handleConnection(client: Socket) {
@@ -123,12 +122,11 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  // ★変更: DBへの保存処理を追加
   async broadcastLog(tunnelId: string, log: RequestLog): Promise<void> {
-    // 1. リアルタイム配信 (ダッシュボード用)
+    // 1. リアルタイム配信
     this.server.to(tunnelId).emit(TUNNEL_EVENTS.NEW_LOG, log);
 
-    // 2. DBへの永続化 (Supabaseへ保存)
+    // 2. DBへの永続化
     try {
       await this.prisma.requestLog.create({
         data: {
@@ -138,6 +136,15 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
           status: log.status,
           duration: log.duration,
           timestamp: new Date(log.timestamp),
+
+          // ★ ESLintエラー回避のためにコメントを追加して any キャストしています
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          headers: log.headers as any,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          body: log.body as any,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          query: log.query as any,
+
           // Tunnelが存在しなければ自動作成して紐付ける
           tunnel: {
             connectOrCreate: {
@@ -150,7 +157,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // console.log(`💾 Log saved to DB for ${tunnelId}`);
     } catch (error) {
       console.error('❌ Failed to save log to DB:', error);
-      // DBエラーでも通信は止めない
     }
   }
 }

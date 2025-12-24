@@ -22,19 +22,55 @@ export default function TunnelPage() {
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    // 1. 初回データ取得 (REST API)
-    fetch(`http://localhost:3000/api/logs/${tunnelId}`)
-      .then((res) => res.json())
-      .then((data) => setLogs(data))
-      .catch((err) => console.error("Failed to fetch logs:", err));
+    // 初回データ取得用の関数
+    const fetchLogs = async () => {
+      try {
+        const res = await fetch(`http://localhost:3000/api/logs/${tunnelId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setLogs(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch logs:", err);
+      }
+    };
 
-    // 2. リアルタイム更新 (WebSocket)
+    // 初回データ取得
+    void fetchLogs();
+
+    // リアルタイム更新 (WebSocket)
     const socket = io("http://localhost:3000", {
       query: { tunnelId, type: "dashboard" },
+      // 自動再接続を有効化
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: Infinity,
     });
 
-    socket.on("connect", () => setIsConnected(true));
-    socket.on("disconnect", () => setIsConnected(false));
+    socket.on("connect", () => {
+      console.log("✅ WebSocket connected");
+      setIsConnected(true);
+      // 接続確立後にログを再取得（サーバー起動後に接続した場合のため）
+      void fetchLogs();
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.log("❌ WebSocket disconnected:", reason);
+      setIsConnected(false);
+    });
+
+    socket.on("connect_error", (error) => {
+      console.error("❌ WebSocket connection error:", error.message);
+      setIsConnected(false);
+    });
+
+    socket.on("reconnect", (attemptNumber) => {
+      console.log(`🔄 WebSocket reconnected after ${attemptNumber} attempts`);
+      setIsConnected(true);
+      // 再接続後にログを再取得
+      void fetchLogs();
+    });
 
     socket.on("new-log", (newLog: Log) => {
       setLogs((prev) => [newLog, ...prev]);

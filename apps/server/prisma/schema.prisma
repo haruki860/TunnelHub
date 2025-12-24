@@ -5,7 +5,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "postgresql" // または mysql / sqlite
   url      = env("DATABASE_URL")
 }
 
@@ -20,7 +20,7 @@ model User {
 
 model Tunnel {
   id          String   @id @default(uuid())
-  subdomain   String   @unique // これを外部キーとして使う
+  subdomain   String   @unique // ★ここが重要。RequestLogからはここを参照する
   apiKey      String   @unique @default(uuid())
   
   userId      String?
@@ -44,12 +44,14 @@ model RequestLog {
   
   timestamp DateTime @default(now())
 
-  // ★追加したフィールド (OK!)
+  // 詳細データ
   headers   Json?
   body      Json?
   query     Json?
   
+  // ★リレーション設定
   tunnelId  String
+  // references を [id] ではなく [subdomain] に設定するのがポイント
   tunnel    Tunnel   @relation(fields: [tunnelId], references: [subdomain])
   
   @@index([timestamp])

@@ -6,6 +6,7 @@ import {
   Query,
   Res,
   Post,
+  Get,
   Param,
   HttpException,
   HttpStatus,
@@ -25,9 +26,37 @@ export class AppController {
     private readonly prisma: PrismaService,
   ) {}
 
-  // ==========================================
-  // ★追加: リクエスト再送機能 (Request Replay)
-  // ==========================================
+  @Get('api/logs/:tunnelId')
+  async getLogs(@Param('tunnelId') tunnelId: string) {
+    try {
+      const logs = await this.prisma.requestLog.findMany({
+        where: { tunnelId },
+        orderBy: { timestamp: 'desc' },
+        take: 100, // 最新100件まで
+      });
+
+      return logs.map((log) => ({
+        requestId: log.requestId,
+        method: log.method,
+        path: log.path,
+        status: log.status,
+        duration: log.duration,
+        timestamp: log.timestamp.toISOString(),
+        headers: log.headers as Record<string, string> | null | undefined,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        body: log.body as any,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        query: log.query as any,
+      }));
+    } catch (error) {
+      console.error('❌ Failed to fetch logs:', error);
+      throw new HttpException(
+        'Failed to fetch logs',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   @Post('api/replay/:logId')
   async replayRequest(@Param('logId') logId: string) {
     console.log(`🔄 Replaying request log ID: ${logId}`);
